@@ -34,6 +34,9 @@ class FuzzyMatcher():
         self.pattern = re.compile('.*?'.join(map(re.escape, list(pattern))))
 
     def score(self, string):
+        if (len(string) == 0):
+            return 100
+        
         match = self.pattern.search(string)
         if match is None:
             return 0
@@ -80,7 +83,7 @@ class DPIScaling():
 class WindowList():
 
     def __init__(self, ignored_windows, always_show_windows, ignored_window_types, icon_size):
-        self.windowList = []
+        self.windowWorkspaceList = []
         self.max_windows = 0
         self.previousWindow = None
         self.fuzzyMatcher = FuzzyMatcher()
@@ -91,7 +94,7 @@ class WindowList():
 
     def refresh(self):
         # Clear existing
-        self.windowList = []
+        self.windowWorkspaceList = []
 
         # Get the screen and force update
         screen = Wnck.Screen.get_default()
@@ -104,7 +107,7 @@ class WindowList():
         
         # Set up the top list (is there a more efficient way?)
         for i in range(len(self.workspaces)):
-            self.windowList.append([])
+            self.windowWorkspaceList.append([])
 
         # Get previous active window
         self.previousWindow = screen.get_active_window()
@@ -132,29 +135,29 @@ class WindowList():
             #print('workspace index ' + str(self.workspaces.index(workspace)))
             # A window on every workspace will have workspace None
             if workspace:
-                self.windowList[self.workspaces.index(workspace)].append({
+                self.windowWorkspaceList[self.workspaces.index(workspace)].append({
                     'name': name,
                     'icon': self.get_icon(i),
                     'class_group': class_group,
-                    'window': i, 'rank': 0
+                    'window': i, 'rank': 1
                 })
             # Pretend the always on visible workspace window is on the active workspace
             else:
-                self.windowList[self.workspaces.index(self.active_workspace)].append({
+                self.windowWorkspaceList[self.workspaces.index(self.active_workspace)].append({
                     'name': name,
                     'icon': self.get_icon(i),
                     'class_group': class_group,
-                    'window': i, 'rank': 0
+                    'window': i, 'rank': 1
                 })
         
         # Determine the maximum amount of windows that needs to go under a specific workspace
-        for i in self.windowList:
+        for i in self.windowWorkspaceList:
             if self.max_windows < len(i):
                 self.max_windows = len(i)
                 
         # Merged correctly ordered list for switching purposes
         # Via http://stackoverflow.com/a/952952
-        self.window_list_merged = [item for sublist in self.windowList for item in sublist]
+        self.window_list_merged = [item for sublist in self.windowWorkspaceList for item in sublist]
 
     def get_icon(self, window):
         if self.icon_size == 'default' or type(self.icon_size) is int:
@@ -164,10 +167,10 @@ class WindowList():
     
     def getLatest(self):
         self.refresh()
-        return self.windowList
+        return self.windowWorkspaceList
 
     def get(self):
-        return self.windowList
+        return self.windowWorkspaceList
         
     def get_max_windows(self):
         return self.max_windows
@@ -176,20 +179,35 @@ class WindowList():
         return self.workspace_count
 
     def getHighestRanked(self):
-        if (len(self.windowList)):
-            return self.windowList[0]
+        if (len(self.window_list_merged)):
+            return self.window_list_merged[0]
 
         return None
 
     def rank(self, text):
-        self.fuzzyMatcher.setPattern(text.lower())
-        for i in self.window_list_merged:
-            score = self.fuzzyMatcher.score(i['name'].lower())
-            if i['class_group']:
-                score += self.fuzzyMatcher.score(i['class_group'].lower())
-            i['rank'] = score
+        
+        text = text.strip()
+        if (len(text) <= 0):
+            self.refresh()
+        else:
+            self.fuzzyMatcher.setPattern(text.lower())
 
-        self.window_list_merged.sort(key=lambda x: x['rank'], reverse=True)
+
+            for i in self.window_list_merged:
+                score = self.fuzzyMatcher.score(i['name'].lower())
+                if i['class_group']:
+                    score += self.fuzzyMatcher.score(i['class_group'].lower())
+                i['rank'] = score
+
+            self.window_list_merged.sort(key=lambda x: x['rank'], reverse=True)
+            #print(self.windowWorkspaceList)
+            #print(len(self.windowWorkspaceList))
+            for i in self.windowWorkspaceList:
+                #print("Sorting workspace: " )
+                #print(i)
+                i.sort(key=lambda x: x['rank'], reverse=True)
+                
+        
 
     def getPreviousWindow(self):
         return self.previousWindow
@@ -211,12 +229,25 @@ class WindowList():
 
 class NimblerWindow(Gtk.Window):
 
+    def makeActive(self, window):
+        # works in linux if wmctrl installed:
+        #os.system('wmctrl -a "%s"' % window.get_name())
+        
+        # Does not seem to work: sends window to front 
+        # but does not give focus:
+     #   window.activate(int(time.time()))
+      #  window.grab_focus()
+        # Sending a timestamp of 0 seems to be the only way 
+        # that window.activate() seems to work properly!
+        window.activate(Gdk.CURRENT_TIME) 
+         
     def __init__(self, config):
+
         Gtk.Window.__init__(self, title='Nimbler')
 
         # Window is initially hidden
         self.hidden = True
-        
+
         # Set up keybindings
         self.keybindings = KeyBindings()
         self.numbering = self.keybindings.numbering
@@ -237,10 +268,13 @@ class NimblerWindow(Gtk.Window):
         }
         
         # Set up the frame
-        self.frame = Gtk.Frame()
-        self.frame.set_shadow_type(1)
-        self.add(self.frame)
-        
+        #self.frame = Gtk.Frame()
+        #self.frame.set_shadow_type(1)
+        #self.add(self.frame)
+ 	self.vbox = Gtk.Box(spacing=10)
+        self.vbox.set_orientation(Gtk.Orientation.VERTICAL)
+        self.add(self.vbox)
+
         # Initialize window list
         self.windowList = WindowList(
             config.ignored_windows,
@@ -253,11 +287,19 @@ class NimblerWindow(Gtk.Window):
 
         # Register events
         self.connect("key-press-event", self.keypress)
-
-    def populate(self, items):
-        self.window_list = self.windowList.windowList
+ 		
+    def populate(self, workspaces):
+       # self.workspace_list = self.windowList.windowList
+        #print("In populate(). workspaces: ")
+        #print(workspaces)
+        visibleWindowWorkspaceList = []
+        for i in workspaces:
+            visibleWindowWorkspaceList.append(i)
+       # print "visibleWindowworkspaceList"
+       # print visibleWindowWorkspaceList
+        
         self.window_counter = 0
-        self.num_workspaces = len(self.window_list)
+        self.num_workspaces = len(visibleWindowWorkspaceList)
 
         dpi_scaling_factor = DPIScaling().scaling_factor
         
@@ -277,49 +319,54 @@ class NimblerWindow(Gtk.Window):
             self.table.attach(workspace_button, i_column_left, i_column_right, 0, 1)
             
             #for j in range(0, len(window_list[i])):
-            for j in range(0, len(self.window_list[i])):
+            for j in range(0, len(visibleWindowWorkspaceList[i])):
                 j4table_left = j + 1
                 j4table_right = j4table_left + 1
-                name = self.window_list[i][j]['name']
-                icon = self.window_list[i][j]['icon']
-                binding = self.numbering[self.window_counter]
                 
-                # Shows what key to press
-                binding_label = Gtk.Label()
-                binding_label.set_padding(5, 0)
-                if self.window_counter < len(self.numbering):
-                    binding_label.set_markup('<b>' + escape(binding) + '</b>')
-                self.table.attach(binding_label, i_column_left, i_binding_right, j4table_left, j4table_right)
-                
-                # Apparently buttons can only have one child, so we need a box
-                # Useful info to be found at http://pygtk.org/pygtk2tutorial/ch-ButtonWidget.html
-                # but keep in mind it's about Gtk+ 2 and also uses differently named Python objects
-                button_box = Gtk.HBox(False, 0)
-                image = Gtk.Image.new_from_pixbuf(icon)
-                button_label = Gtk.Label(name)
-                button_label.set_alignment(0, 0.5) # first attribute is horizontal, second is vertical
-                #button_label.set_max_width_chars(256) # not working, why?
-                # TODO Make configurable?
-                button_label.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
-                
-                # Pack 'em in
-                button_box.pack_start(image, False, False, 3)
-                button_box.pack_start(button_label, False, False, 3)
-                
-                # The all important window button
-                button = Gtk.Button()
-                button.set_relief(Gtk.ReliefStyle.NONE)
-                button.set_size_request((dpi_scaling_factor * 256), -1)
-                button.set_name(binding)
-                #button.set_sensitive(False) needs to be trigged while searching
-                button.connect('clicked', self.present_window_via_button)
-                
-                # Add the content to the button
-                button.add(button_box)
-                self.table.attach(button, i_binding_right, i_column_right, j4table_left, j4table_right)
-                
-                # Up the overall counter
-                self.window_counter += 1
+                if (visibleWindowWorkspaceList[i][j]['rank'] > 0):
+                    name = visibleWindowWorkspaceList[i][j]['name']
+                    #print("Adding button for"  + name + ", with rank " + str(visibleWindowWorkspaceList[i][j]['rank']))
+                    icon = visibleWindowWorkspaceList[i][j]['icon']
+                    binding = self.numbering[self.window_counter]
+                    rank = visibleWindowWorkspaceList[i][j]['rank']
+                    # Shows what key to press
+                    binding_label = Gtk.Label()
+                    binding_label.set_padding(5, 0)
+                    if self.window_counter < len(self.numbering):
+                        binding_label.set_markup('<b>' + escape(binding) + '</b>')
+                    self.table.attach(binding_label, i_column_left, i_binding_right, j4table_left, j4table_right)
+                    
+                    # Apparently buttons can only have one child, so we need a box
+                    # Useful info to be found at http://pygtk.org/pygtk2tutorial/ch-ButtonWidget.html
+                    # but keep in mind it's about Gtk+ 2 and also uses differently named Python objects
+                    button_box = Gtk.HBox(False, 0)
+                    image = Gtk.Image.new_from_pixbuf(icon)
+                    button_label = Gtk.Label(name)
+                    button_label.set_alignment(0, 0.5) # first attribute is horizontal, second is vertical
+                    #button_label.set_max_width_chars(256) # not working, why?
+                    # TODO Make configurable?
+                    button_label.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+                    
+                    # Pack 'em in
+                    button_box.pack_start(image, False, False, 3)
+                    button_box.pack_start(button_label, False, False, 3)
+                    
+                    # The all important window button
+                    button = Gtk.Button()
+                    button.set_relief(Gtk.ReliefStyle.NONE)
+                    button.set_size_request((dpi_scaling_factor * 256), -1)
+                    button.set_name(binding)
+                    #button.set_sensitive(False) needs to be trigged while searching
+                    button.connect('clicked', self.present_window_via_button)
+                    
+                    # Add the content to the button
+                    button.add(button_box)
+                    #print("Attaching button.")
+                    
+                    self.table.attach(button, i_binding_right, i_column_right, j4table_left, j4table_right)
+                    
+                    # Up the overall counter
+                    self.window_counter += 1
     
     def activate_workspace(self, label):
         # Ignore everything in the supplied string but the numbers
@@ -332,13 +379,21 @@ class NimblerWindow(Gtk.Window):
     def activate_workspace_via_button(self, button):
         name = button.get_name()
         self.activate_workspace(name)
-        
+
+    def repopulate(self):
+        self.newDisplayTable(self.max_windows,self.num_workspaces)   
+        self.populate(self.windowList.get())
+        self.show_all()
+
     def enteredNameChanged(self, entry):
         text = entry.get_text()
+        print("enteredNameChanged: " + text + ", len: " + str(len(text)))
 
-        if text:
-            self.windowList.rank(text)
-            self.populate(self.windowList.get())
+        print("enteredNameChanged: About to rank....")
+        self.windowList.rank(text)
+        #self.window_list_merged.rank(text)
+        self.repopulate()
+       
 
     def close_window(self, window):
         window.close(self.getXTime())
@@ -353,8 +408,14 @@ class NimblerWindow(Gtk.Window):
         workspace = window.get_workspace()
         if workspace is not None:
             workspace.activate(self.getXTime())
-
-        window.activate(self.getXTime())
+        self.makeActive(window)
+       # i = 0
+       # window.activate(self.getXTime())
+       # while not window.is_most_recently_activated():
+       #     i += 1
+       #     print("Window is not yet most recently activated. Calling activate (" + str(i) +")")
+       #     sleep(0.1) 
+       #     window.activate(self.getXTime())
     
     def present_window_via_button(self, button):
         name = button.get_name()
@@ -408,45 +469,69 @@ class NimblerWindow(Gtk.Window):
             self.toggle()
         if not self.enteredName.has_focus() and self.presentByShortcut(event, event.keyval):
             return
-        elif event.keyval == Gdk.KEY_colon:
+        elif event.keyval == Gdk.KEY_slash:
             # Show input, thanks to http://stackoverflow.com/a/4956770
-            self.enteredName.show()
-            self.enteredName.grab_focus()
+            if (not self.enteredName.is_visible()):
+                self.enteredName.show()
+                self.enteredName.grab_focus()
+            else:
+                print("hiding textbox...")
+                self.enteredName.hide()
+                self.table.grab_focus()
             # Return True so the colon doesn't end up in the Entry box
             return True
         # The text input has focus
         else:
             if event.keyval == Gdk.KEY_Return:
-                # TODO do something!
-                text = self.enteredName.get_text()
+		self.toggle()
+            	self.presentHighestRanked()                
+		# TODO do something!
+               # text = self.enteredName.get_text()
 
                 # You might decide just to enter the character after all
                 # Needs to be converted to keyval though
-                number = ord(text)
-                keyval = Gdk.unicode_to_keyval(number)
-                if len(text) is 1 and self.presentByShortcut(event, keyval):
-                    return
+                #number = ord(text)
+               # keyval = Gdk.unicode_to_keyval(number)
+               # if len(text) is 1 and self.presentByShortcut(event, keyval):
+                #    return
+
+    def newDisplayTable(self, maxWindows, numWorkspaces):
+        try:
+            self.table.destroy()
+        except AttributeError:
+            1
+            
+        self.table = Gtk.Table(maxWindows, numWorkspaces * 2, False)
+        self.table.set_name('NimblerTable')
+        self.vbox.add(self.table)
         
     def toggle(self):
         if self.hidden:
             self.windowList.refresh()
             self.max_windows = self.windowList.get_max_windows() #change
-            self.workspaces = len(self.windowList.get()) #bit illogical naming going on here
+            self.workspaces = len(self.windowList.get()) 
             
-            self.table = Gtk.Table(self.max_windows, self.workspaces * 2, False)
-            self.table.set_name('NimblerTable')
+            
             #self.add(self.table)
-            self.frame.add(self.table)
-            
+            #self.frame.add(self.table)
+           
             # Set up the box to enter an app name
             self.enteredName = Gtk.Entry()
             # Set up event
             self.enteredName.connect("changed", self.enteredNameChanged)
-            self.table.attach(self.enteredName, 0, self.workspaces*2, self.max_windows+1, self.max_windows+2)
+            #self.table.attach(self.enteredName, 0, self.workspaces*2, self.max_windows+1, self.max_windows+2)
             self.enteredName.set_no_show_all(True)
+	    #self.frame.add(self.enteredName)	
+	    self.vbox.add(self.enteredName)
+	    self.newDisplayTable(self.max_windows,self.workspaces)
+        
+	    
 
+	    self.enteredName.hidden = True
+	    self.enteredName.hide()
+	
             # Register enteredName event
-            self.enteredName.connect('changed', self.enteredNameChanged)
+           # self.enteredName.connect('changed', self.enteredNameChanged)
             
             # Populate windows
             self.populate(self.windowList.get())
@@ -454,14 +539,14 @@ class NimblerWindow(Gtk.Window):
             # Set state
             self.hidden = False
             self.show_all()
-
+	    self.enteredName.hide()
             # Clear out the text field
-            #self.enteredName.set_text('')
+            self.enteredName.set_text('')
             #self.enteredName.grab_focus()
 
             # Show our window with focus
             self.stick()
-
+	    self.enteredName.hide()	
             time = self.getXTime()
 
             self.get_window().focus(time)
@@ -469,6 +554,7 @@ class NimblerWindow(Gtk.Window):
             self.hidden = True
             self.table.destroy()
             self.hide()
+	    self.enteredName.hide()
             self.resize(1,1)
 
     def hotkey(self, key, data):
@@ -497,6 +583,7 @@ class Config:
 
     def loadOptions(self):
         self.hotkey = self.getOption('hotkey', 'F10')
+        self.searchKey = self.getOption('searchKey', 'KEY_slash')
         self.ignored_windows = self.prepareIgnoredWindows(
             self.getOption('ignored_windows', [])
         )
@@ -557,26 +644,28 @@ class Config:
             icon_size = int(icon_size)
             Wnck.set_default_icon_size(icon_size)
             return 'default'
+def main():
+    # Catch SIGINT signal
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-# Catch SIGINT signal
-signal.signal(signal.SIGINT, signal.SIG_DFL)
+    # Load the configuration with defaults
+    config = Config()
 
-# Load the configuration with defaults
-config = Config()
+    # Create the window and set attributes
+    win = NimblerWindow(config)
+    win.connect("delete-event", Gtk.main_quit)
+    win.set_position(Gtk.WindowPosition.CENTER)
+    win.set_keep_above(True)
+    win.set_skip_taskbar_hint(True)
+    win.set_decorated(False)
 
-# Create the window and set attributes
-win = NimblerWindow(config)
-win.connect("delete-event", Gtk.main_quit)
-win.set_position(Gtk.WindowPosition.CENTER)
-win.set_keep_above(True)
-win.set_skip_taskbar_hint(True)
-win.set_decorated(False)
-
-# Set the hotkey
-Keybinder.init()
-if not Keybinder.bind(config.hotkey, win.hotkey, None):
-    print("Could not bind the hotkey:", config.hotkey)
-    exit()
-
+    # Set the hotkey
+    Keybinder.init()
+    if not Keybinder.bind(config.hotkey, win.hotkey, None):
+        print("Could not bind the hotkey:", config.hotkey)
+        exit()
+    Gtk.main()
+    
 # The main loop
-Gtk.main()
+if __name__ == "__main__":
+   main()
