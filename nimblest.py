@@ -487,7 +487,7 @@ class NimblestWindow(Gtk.Window):
                 self.enteredName.show()
                 self.enteredName.grab_focus()
             else:
-                print("hiding textbox...")
+                #print("hiding textbox...")
                 self.enteredName.hide()
                 self.table.grab_focus()
             # Return True so the colon doesn't end up in the Entry box
