@@ -4,7 +4,8 @@ gi.require_version('GdkX11', '3.0')
 gi.require_version('Gtk', '3.0')
 gi.require_version('Keybinder', '3.0')
 gi.require_version('Wnck', '3.0')
-
+from time import sleep
+import time
 from gi.repository import Gtk, GdkPixbuf, Wnck, Keybinder, Gdk, GdkX11, Pango
 import re
 
@@ -83,7 +84,12 @@ class DPIScaling():
 class WindowList():
 
     def __init__(self, ignored_windows, always_show_windows, ignored_window_types, icon_size):
+        #two-dimenional list of windows [workspace][windowindex]:
         self.windowWorkspaceList = []
+        
+        #windows:
+        self.window_list_merged = []
+          
         self.max_windows = 0
         self.previousWindow = None
         self.fuzzyMatcher = FuzzyMatcher()
@@ -92,10 +98,11 @@ class WindowList():
         self.ignored_window_types = ignored_window_types
         self.icon_size = icon_size
 
+
     def refresh(self):
         # Clear existing
         self.windowWorkspaceList = []
-
+       # self.filteredWindowWorkspaceList = []
         # Get the screen and force update
         screen = Wnck.Screen.get_default()
         screen.force_update()
@@ -157,8 +164,14 @@ class WindowList():
                 
         # Merged correctly ordered list for switching purposes
         # Via http://stackoverflow.com/a/952952
-        self.window_list_merged = [item for sublist in self.windowWorkspaceList for item in sublist]
-
+        #self.window_list_merged = [item for sublist in self.windowWorkspaceList for item in sublist]
+        #self.filteredWindowWorkspaceList = self.windowWorkspaceList
+        self.filterWins()
+        
+    def filterWins(self):
+        self.window_list_merged = [item for sublist in self.windowWorkspaceList for item in sublist if item['rank'] > 0]
+        
+        
     def get_icon(self, window):
         if self.icon_size == 'default' or type(self.icon_size) is int:
             return window.get_icon()
@@ -200,11 +213,8 @@ class WindowList():
                 i['rank'] = score
 
             self.window_list_merged.sort(key=lambda x: x['rank'], reverse=True)
-            #print(self.windowWorkspaceList)
-            #print(len(self.windowWorkspaceList))
+ 
             for i in self.windowWorkspaceList:
-                #print("Sorting workspace: " )
-                #print(i)
                 i.sort(key=lambda x: x['rank'], reverse=True)
                 
         
@@ -271,7 +281,8 @@ class NimblerWindow(Gtk.Window):
         #self.frame = Gtk.Frame()
         #self.frame.set_shadow_type(1)
         #self.add(self.frame)
- 	self.vbox = Gtk.Box(spacing=10)
+        
+        self.vbox = Gtk.Box(spacing=10)
         self.vbox.set_orientation(Gtk.Orientation.VERTICAL)
         self.add(self.vbox)
 
@@ -287,16 +298,19 @@ class NimblerWindow(Gtk.Window):
 
         # Register events
         self.connect("key-press-event", self.keypress)
- 		
+
+    def sort(self,searchText):
+        return 0
+	
+	def drawGrid(self, workspaceWindowArray):
+            return 0
+		
     def populate(self, workspaces):
-       # self.workspace_list = self.windowList.windowList
-        #print("In populate(). workspaces: ")
-        #print(workspaces)
         visibleWindowWorkspaceList = []
+        
         for i in workspaces:
             visibleWindowWorkspaceList.append(i)
-       # print "visibleWindowworkspaceList"
-       # print visibleWindowWorkspaceList
+
         
         self.window_counter = 0
         self.num_workspaces = len(visibleWindowWorkspaceList)
@@ -304,8 +318,6 @@ class NimblerWindow(Gtk.Window):
         dpi_scaling_factor = DPIScaling().scaling_factor
         
         for i in range(0, self.num_workspaces):
-        #for i in range(0, self.workspaces):
-            #print('window_list[i] '+str(window_list[i]))
             i_label = i + 1
             i_column_left = i * 2
             i_column_right = i_column_left + 2
@@ -383,14 +395,18 @@ class NimblerWindow(Gtk.Window):
     def repopulate(self):
         self.newDisplayTable(self.max_windows,self.num_workspaces)   
         self.populate(self.windowList.get())
+        
         self.show_all()
 
     def enteredNameChanged(self, entry):
         text = entry.get_text()
-        print("enteredNameChanged: " + text + ", len: " + str(len(text)))
+        #print("enteredNameChanged: " + text + ", len: " + str(len(text)))
 
-        print("enteredNameChanged: About to rank....")
+        #print("enteredNameChanged: About to rank....")
+        
+        self.windowList.refresh()
         self.windowList.rank(text)
+        self.windowList.filterWins()
         #self.window_list_merged.rank(text)
         self.repopulate()
        
@@ -409,14 +425,7 @@ class NimblerWindow(Gtk.Window):
         if workspace is not None:
             workspace.activate(self.getXTime())
         self.makeActive(window)
-       # i = 0
-       # window.activate(self.getXTime())
-       # while not window.is_most_recently_activated():
-       #     i += 1
-       #     print("Window is not yet most recently activated. Calling activate (" + str(i) +")")
-       #     sleep(0.1) 
-       #     window.activate(self.getXTime())
-    
+
     def present_window_via_button(self, button):
         name = button.get_name()
         window_number = self.numbering.index(name)
@@ -424,9 +433,10 @@ class NimblerWindow(Gtk.Window):
     
     def present_window_via_number(self, window_number):
         self.toggle()
-        self.presentWindow(
-            self.windowList.window_list_merged[window_number]['window']
-        )
+       # print("Present window with number: %s" % window_number)
+        theWin = self.windowList.window_list_merged[window_number]['window']
+       # print(theWin.get_name())
+        self.presentWindow(theWin)
 
     def presentByShortcut(self, event, keyval):
         # Workspace shortcuts
@@ -436,6 +446,7 @@ class NimblerWindow(Gtk.Window):
             )
         # Window shortcuts
         elif keyval in self.numbering_keyvals[:self.window_counter]:
+           # print("Trying to call window with key: " + str(self.numbering_keyvals.index(keyval)))
             if event.get_state() & Gdk.ModifierType.CONTROL_MASK:
                 self.close_window_via_number(self.numbering_keyvals.index(keyval))
             else:
@@ -462,6 +473,7 @@ class NimblerWindow(Gtk.Window):
         # If event.keyval is found in the dictionary of keypad numbers it'll change it into a regular number;
         # otherwise it simply returns event.keyval
         # Thanks to http://stackoverflow.com/a/103081
+       # print ("Keypress: " + str(event.keyval))
         event.keyval = self.keypad_numbers.get(event.keyval, event.keyval)
         
         #selected = self.appListView.get_selection().get_selected()
@@ -567,7 +579,6 @@ class NimblerWindow(Gtk.Window):
             time = 0
 
         return time
-
 
 class Config:
 
